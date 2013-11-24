@@ -180,14 +180,8 @@ namespace MIPSComp
 			if (js.VfpuWriteMask(i))
 				continue;
 
-			// TODO: These clampers are wrong - put this into google
-			// and look at the plot:   abs(x) - abs(x-0.5) + 0.5
-			// It's too steep.
-
-			// Also, they mishandle NaN and Inf.
 			int sat = (js.prefixD >> (i * 2)) & 3;
 			if (sat == 1) {
-				// clamped = fabs(x) - fabs(x-0.5f) + 0.5f; // [ 0, 1]
 				fpr.MapRegV(vregs[i], MAP_DIRTY);
 				
 				MOVI2F(S0, 0.0f, R0);
@@ -202,13 +196,6 @@ namespace MIPSComp
 				SetCC(CC_GT);
 				VMOV(fpr.V(vregs[i]), S1);
 				SetCC(CC_AL);
-
-				/*
-				VABS(S1, fpr.V(vregs[i]));                  // S1 = fabs(x)
-				VSUB(fpr.V(vregs[i]), fpr.V(vregs[i]), S0); // S2 = fabs(x-0.5f) {VABD}
-				VABS(fpr.V(vregs[i]), fpr.V(vregs[i]));
-				VSUB(fpr.V(vregs[i]), S1, fpr.V(vregs[i])); // v[i] = S1 - S2 + 0.5f
-				VADD(fpr.V(vregs[i]), fpr.V(vregs[i]), S0);*/
 			} else if (sat == 3) {
 				fpr.MapRegV(vregs[i], MAP_DIRTY);
 
@@ -224,16 +211,6 @@ namespace MIPSComp
 				SetCC(CC_GT);
 				VMOV(fpr.V(vregs[i]), S1);
 				SetCC(CC_AL);
-
-				// clamped = fabs(x) - fabs(x-1.0f);        // [-1, 1]
-				/*
-				fpr.MapRegV(vregs[i], MAP_DIRTY);
-				MOVI2F(S0, 1.0f, R0);
-				VABS(S1, fpr.V(vregs[i]));                  // S1 = fabs(x)
-				VSUB(fpr.V(vregs[i]), fpr.V(vregs[i]), S0); // S2 = fabs(x-1.0f) {VABD}
-				VABS(fpr.V(vregs[i]), fpr.V(vregs[i]));
-				VSUB(fpr.V(vregs[i]), S1, fpr.V(vregs[i])); // v[i] = S1 - S2
-				*/
 			}
 		}
 	}
@@ -345,8 +322,8 @@ namespace MIPSComp
 
 	void Jit::Comp_SVQ(MIPSOpcode op)
 	{
-		CONDITIONAL_DISABLE;
 		NEON_IF_AVAILABLE(CompNEON_SVQ);
+		CONDITIONAL_DISABLE;
 
 		int imm = (signed short)(op&0xFFFC);
 		int vt = (((op >> 16) & 0x1f)) | ((op&1) << 5);
