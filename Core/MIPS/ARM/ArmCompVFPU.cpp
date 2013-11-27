@@ -599,6 +599,7 @@ namespace MIPSComp
 	}
 
 	void Jit::Comp_VDot(MIPSOpcode op) {
+		NEON_IF_AVAILABLE(CompNEON_VDot);
 		CONDITIONAL_DISABLE;
 		if (js.HasUnknownPrefix()) {
 			DISABLE;
