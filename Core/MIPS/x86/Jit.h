@@ -28,6 +28,7 @@
 #include "Common/x64Emitter.h"
 #include "Core/MIPS/JitCommon/JitBlockCache.h"
 #include "Core/MIPS/JitCommon/JitState.h"
+#include "Core/HLE/ReplaceTables.h"
 #include "RegCache.h"
 #include "RegCacheFPU.h"
 
@@ -74,6 +75,7 @@ public:
 
 	void CompileAt(u32 addr);
 	void Comp_RunBlock(MIPSOpcode op);
+	void Comp_ReplacementFunc(MIPSOpcode op);
 
 	// Ops
 	void Comp_ITypeMem(MIPSOpcode op);

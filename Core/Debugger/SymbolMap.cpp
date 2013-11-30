@@ -52,6 +52,7 @@ bool SymbolMap::LoadSymbolMap(const char *filename)
 	FILE *f = File::OpenCFile(filename, "r");
 	if (!f)
 		return false;
+
 	//char temp[256];
 	//fgets(temp,255,f); //.text section layout
 	//fgets(temp,255,f); //  Starting        Virtual
@@ -103,7 +104,7 @@ bool SymbolMap::LoadSymbolMap(const char *filename)
 		sscanf(line,"%08x %08x %08x %i %127c",&address,&size,&vaddress,(int*)&type,name);
 		
 		if (type == ST_DATA && size==0)
-			size=4;
+			size = 4;
 
 		//e.vaddress|=0x80000000;
 		if (strcmp(name,".text")==0 || strcmp(name,".init")==0 || strlen(name)<=1) { 
@@ -127,81 +128,71 @@ bool SymbolMap::LoadSymbolMap(const char *filename)
 	return true;
 }
 
-
-void SymbolMap::SaveSymbolMap(const char *filename) const
-{
+void SymbolMap::SaveSymbolMap(const char *filename) const {
 	lock_guard guard(lock_);
 	FILE *f = File::OpenCFile(filename, "w");
 	if (!f)
 		return;
+
 	fprintf(f,".text\n");
-	for (auto it = functions.begin(), end = functions.end(); it != end; ++it)
-	{
+	for (auto it = functions.begin(), end = functions.end(); it != end; ++it) {
 		const FunctionEntry& e = it->second;
 		fprintf(f,"%08x %08x %08x %i %s\n",it->first,e.size,it->first,ST_FUNCTION,GetLabelName(it->first));
 	}
 	
-	for (auto it = data.begin(), end = data.end(); it != end; ++it)
-	{
+	for (auto it = data.begin(), end = data.end(); it != end; ++it) {
 		const DataEntry& e = it->second;
 		fprintf(f,"%08x %08x %08x %i %s\n",it->first,e.size,it->first,ST_DATA,GetLabelName(it->first));
 	}
 	fclose(f);
 }
 
-bool SymbolMap::LoadNocashSym(const char *filename)
-{
+bool SymbolMap::LoadNocashSym(const char *filename) {
 	lock_guard guard(lock_);
 	FILE *f = File::OpenCFile(filename, "r");
 	if (!f)
 		return false;
 
-	while (!feof(f))
-	{
+	while (!feof(f)) {
 		char line[256], value[256] = {0};
-		char *p = fgets(line,256,f);
+		char *p = fgets(line, 256, f);
 		if(p == NULL)
 			break;
 
 		u32 address;
-		if (sscanf(line,"%08X %s",&address,value) != 2) continue;
-		if (address == 0 && strcmp(value,"0") == 0) continue;
+		if (sscanf(line,"%08X %s",&address,value) != 2)
+			continue;
+		if (address == 0 && strcmp(value,"0") == 0)
+			continue;
 
-		if (value[0] == '.')	// data directives
-		{
+		if (value[0] == '.') { // data directives
 			char* s = strchr(value,':');
-			if (s != NULL)
-			{
+			if (s != NULL) {
 				*s = 0;
 
 				u32 size = 0;
-				if (sscanf(s+1,"%04X",&size) != 1) continue;
+				if (sscanf(s+1,"%04X",&size) != 1)
+					continue;
 
-				if (strcasecmp(value,".byt") == 0)
-				{
+				if (strcasecmp(value,".byt") == 0) {
 					AddData(address,size,DATATYPE_BYTE);
-				} else if (strcasecmp(value,".wrd") == 0)
-				{
+				} else if (strcasecmp(value,".wrd") == 0) {
 					AddData(address,size,DATATYPE_HALFWORD);
-				} else if (strcasecmp(value,".dbl") == 0)
-				{
+				} else if (strcasecmp(value,".dbl") == 0) {
 					AddData(address,size,DATATYPE_WORD);
-				} else if (strcasecmp(value,".asc") == 0)
-				{
+				} else if (strcasecmp(value,".asc") == 0) {
 					AddData(address,size,DATATYPE_ASCII);
 				}
 			}
 		} else {				// labels
 			int size = 1;
-			char* seperator = strchr(value,',');
-			if (seperator != NULL)
-			{
+			char* seperator = strchr(value, ',');
+			if (seperator != NULL) {
 				*seperator = 0;
 				sscanf(seperator+1,"%08X",&size);
 			}
 
-			if (size != 1)
-			{
+			if (size != 1) {
 				AddFunction(value,address,size);
 			} else {
 				AddLabel(value,address);

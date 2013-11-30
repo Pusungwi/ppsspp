@@ -30,6 +30,7 @@
 #include "Core/MemMap.h"
 
 #include "Core/MIPS/MIPS.h"
+#include "Core/MIPS/MIPSAnalyst.h"
 #include "Core/MIPS/JitCommon/JitCommon.h"
 
 #include "Core/System.h"
@@ -164,6 +165,8 @@ void CPU_Init() {
 
 	std::string filename = coreParameter.fileToStart;
 	IdentifiedFileType type = Identify_File(filename);
+
+	MIPSAnalyst::Reset();
 
 	switch (type) {
 	case FILETYPE_PSP_ISO:

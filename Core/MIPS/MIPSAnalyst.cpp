@@ -24,9 +24,16 @@
 #include "Core/MIPS/MIPSCodeUtils.h"
 #include "Core/Debugger/SymbolMap.h"
 #include "Core/Debugger/DebugInterface.h"
+#include "Core/HLE/ReplaceTables.h"
+#include "Core/MIPS/JitCommon/JitCommon.h"
+#include "ext/xxhash.h"
 
 using namespace MIPSCodeUtils;
-using namespace std;
+
+// Not in a namespace because MSVC's debugger doesn't like it
+static std::vector<MIPSAnalyst::AnalyzedFunction> functions;
+static std::map<u32, MIPSAnalyst::AnalyzedFunction*> hashToFunction;
+
 
 namespace MIPSAnalyst {
 	// Only can ever output a single reg.
@@ -129,73 +136,48 @@ namespace MIPSAnalyst {
 				results.r[outReg].MarkWrite(addr);
 			}
 
-			if (info & DELAYSLOT)
-			{
+			if (info & DELAYSLOT) {
 				// Let's just finish the delay slot before bailing.
 				endAddr = addr + 4;
 			}
 		}
 
-		int numUsedRegs=0;
-		static int totalUsedRegs=0;
-		static int numAnalyzings=0;
+		int numUsedRegs = 0;
+		static int totalUsedRegs = 0;
+		static int numAnalyzings = 0;
 		for (int i = 0; i < MIPS_NUM_GPRS; i++) {
 			if (results.r[i].used) {
 				numUsedRegs++;
 			}
 		}
-		totalUsedRegs+=numUsedRegs;
+		totalUsedRegs += numUsedRegs;
 		numAnalyzings++;
-		DEBUG_LOG(CPU,"[ %08x ] Used regs: %i	 Average: %f",address,numUsedRegs,(float)totalUsedRegs/(float)numAnalyzings);
+		VERBOSE_LOG(CPU, "[ %08x ] Used regs: %i Average: %f", address, numUsedRegs, (float)totalUsedRegs / (float)numAnalyzings);
 
 		return results;
 	}
-
-
-	struct Function
-	{
-		u32 start;
-		u32 end;
-		u32 hash;
-		u32 size;
-		bool isStraightLeaf;
-		bool hasHash;
-		bool usesVFPU;
-		char name[64];
-	};
-
-	vector<Function> functions;
-
-	map<u32, Function*> hashToFunction;
-
-	void Shutdown()
-	{
+	
+	void Reset()	{
 		functions.clear();
 		hashToFunction.clear();
 	}
 
-	// hm pointless :P
-	void UpdateHashToFunctionMap()
-	{
+	void UpdateHashToFunctionMap() {
 		hashToFunction.clear();
-		for (vector<Function>::iterator iter = functions.begin(); iter != functions.end(); iter++)
-		{
-			Function &f = *iter;
-			if (f.hasHash)
-			{
+		for (auto iter = functions.begin(); iter != functions.end(); iter++) {
+			AnalyzedFunction &f = *iter;
+			if (f.hasHash) {
 				hashToFunction[f.hash] = &f;
 			}
 		}
 	}
 
-
-	bool IsRegisterUsed(MIPSGPReg reg, u32 addr)
-	{
-		while (true)
-		{
+	// Look forwards to find if a register is used again in this block.
+	// Don't think we use this yet.
+	bool IsRegisterUsed(MIPSGPReg reg, u32 addr) {
+		while (true) {
 			MIPSOpcode op = Memory::Read_Instruction(addr);
 			MIPSInfo info = MIPSGetInfo(op);
-
 			if ((info & IN_RS) && (MIPS_GET_RS(op) == reg))
 				return true;
 			if ((info & IN_RT) && (MIPS_GET_RT(op) == reg))
@@ -210,43 +192,45 @@ namespace MIPSAnalyst {
 				return false; //the reg got clobbed! yay!
 			if ((info & OUT_RA) && (reg == MIPS_REG_RA))
 				return false; //the reg got clobbed! yay!
-			addr+=4;
+			addr += 4;
 		}
 		return true;
 	}
 
-	void HashFunctions()
-	{
-		for (vector<Function>::iterator iter = functions.begin(); iter!=functions.end(); iter++)
-		{
-			Function &f=*iter;
-			u32 hash = 0x1337babe;
-			for (u32 addr = f.start; addr <= f.end; addr += 4)
-			{
+	static void HashFunctions() {
+		std::vector<u32> hashBuffer;
+		for (auto iter = functions.begin(); iter != functions.end(); iter++) {
+			AnalyzedFunction &f = *iter;
+			hashBuffer.clear();
+			for (u32 addr = f.start; addr <= f.end; addr += 4) {
 				u32 validbits = 0xFFFFFFFF;
 				MIPSOpcode instr = Memory::Read_Instruction(addr);
 				MIPSInfo flags = MIPSGetInfo(instr);
 				if (flags & IN_IMM16)
-					validbits&=~0xFFFF;
+					validbits &= ~0xFFFF;
 				if (flags & IN_IMM26)
-					validbits&=~0x03FFFFFF;
-				hash = __rotl(hash,13);
-				hash ^= (instr&validbits);
+					validbits &= ~0x03FFFFFF;
+				hashBuffer.push_back(instr.encoding & validbits);
 			}
-			f.hash=hash;
-			f.hasHash=true;
+
+			f.hash = XXH32((void *)&hashBuffer[0], hashBuffer.size() / 4, 0xa36185fb);
+			f.hasHash = true;
 		}
 	}
 
-	void ScanForFunctions(u32 startAddr, u32 endAddr /*, std::vector<u32> knownEntries*/) {
-		Function currentFunction = {startAddr};
+	void ReplaceFunctions();
+
+	void ScanForFunctions(u32 startAddr, u32 endAddr, bool insertSymbols) {
+		AnalyzedFunction currentFunction = {startAddr};
 
 		u32 furthestBranch = 0;
 		bool looking = false;
 		bool end = false;
 		bool isStraightLeaf = true;
+
 		u32 addr;
-		for (addr = startAddr; addr <= endAddr; addr+=4) {
+		for (addr = startAddr; addr <= endAddr; addr += 4) {
+			// Use pre-existing symbol map info if available. May be more reliable.
 			SymbolInfo syminfo;
 			if (symbolMap.GetSymbolInfo(&syminfo, addr, ST_FUNCTION)) {
 				addr = syminfo.address + syminfo.size;
@@ -257,14 +241,14 @@ namespace MIPSAnalyst {
 			u32 target = GetBranchTargetNoRA(addr);
 			if (target != INVALIDTARGET) {
 				isStraightLeaf = false;
-				if (target > furthestBranch) {
+				if (target > furthestBranch && target < addr + 100) {
 					furthestBranch = target;
 				}
 			}
 			if (op == MIPS_MAKE_JR_RA()) {
 				if (furthestBranch >= addr) {
 					looking = true;
-					addr+=4;
+					addr += 4;
 				} else {
 					end = true;
 				}
@@ -283,6 +267,7 @@ namespace MIPSAnalyst {
 					//end = true;
 				}
 			}
+
 			if (end) {
 				currentFunction.end = addr + 4;
 				currentFunction.isStraightLeaf = isStraightLeaf;
@@ -291,20 +276,48 @@ namespace MIPSAnalyst {
 				addr += 4;
 				looking = false;
 				end = false;
-				isStraightLeaf=true;
+				isStraightLeaf = true;
 				currentFunction.start = addr+4;
 			}
 		}
+
 		currentFunction.end = addr + 4;
 		functions.push_back(currentFunction);
 
-		for (vector<Function>::iterator iter = functions.begin(); iter!=functions.end(); iter++) {
-			(*iter).size = ((*iter).end-(*iter).start+4);
-			char temp[256];
-			sprintf(temp,"z_un_%08x",(*iter).start);
-			symbolMap.AddFunction(temp,(*iter).start,(*iter).end-(*iter).start+4);
+		if (insertSymbols) {
+			// If requested, invent symbols for our newly discovered functions
+			// into the symbol map.
+			for (auto iter = functions.begin(); iter != functions.end(); iter++) {
+				iter->size = (iter->end - iter->start+4);
+				char temp[256];
+				sprintf(temp,"z_un_%08x",iter->start);
+				symbolMap.AddFunction(temp, iter->start, iter->end - iter->start+4);
+			}
 		}
+
 		HashFunctions();
+		ReplaceFunctions();
+	}
+
+	void ForgetFunctions(u32 startAddr, u32 endAddr) {
+		// TODO: speedup
+		auto iter = functions.begin();
+		while (iter != functions.end()) {
+			if (iter->start >= startAddr && iter->start <= endAddr) {
+				iter = functions.erase(iter);
+			} else {
+				iter++;
+			}
+		}
+	}
+
+	void ReplaceFunctions() {
+		for (size_t i = 0; i < functions.size(); i++) {
+			int index = GetReplacementFuncIndex(functions[i].hash, functions[i].size);
+			if (index >= 0) {
+				Memory::Write_U32(MIPS_EMUHACK_CALL_REPLACEMENT | i, functions[i].start);
+			}
+		}
 	}
 
 	struct HashMapFunc {
@@ -319,8 +332,8 @@ namespace MIPSAnalyst {
 		if (fwrite(&num,4,1,file) != 1) //fill in later
 			WARN_LOG(CPU, "Could not store hash map %s", filename);
 
-		for (vector<Function>::iterator iter = functions.begin(); iter!=functions.end(); iter++) {
-			Function &f=*iter;
+		for (auto iter = functions.begin(); iter!=functions.end(); iter++) {
+			AnalyzedFunction &f=*iter;
 			if (f.hasHash && f.size >= 12) {
 				HashMapFunc temp;
 				memset(&temp, 0, sizeof(temp));
@@ -340,28 +353,32 @@ namespace MIPSAnalyst {
 		fclose(file);
 	}
 
-
-	void LoadHashMap(const char *filename)
-	{
+	void LoadHashMap(const char *filename) {
 		HashFunctions();
 		UpdateHashToFunctionMap();
 
 		FILE *file = File::OpenCFile(filename, "rb");
+		if (!file) {
+			return;
+		}
 		int num;
-		if (fread(&num, 4, 1, file) == 1) {
-			for (int i = 0; i < num; i++) {
-				HashMapFunc temp;
-				if(fread(&temp, sizeof(temp), 1, file) == 1) {
-					map<u32,Function*>::iterator iter = hashToFunction.find(temp.hash);
-					if (iter != hashToFunction.end()) {
-						//yay, found a function!
-						Function &f = *(iter->second);
-						if (f.size == temp.size) {
-							strcpy(f.name, temp.name);
-							f.hash=temp.hash;
-							f.size=temp.size;
-						}
-					}
+		if (!fread(&num, 4, 1, file) == 1) {
+			fclose(file);
+			return;
+		}
+		for (int i = 0; i < num; i++) {
+			HashMapFunc temp;
+			if (fread(&temp, sizeof(temp), 1, file) != 1)
+				continue;
+
+			std::map<u32,AnalyzedFunction*>::iterator iter = hashToFunction.find(temp.hash);
+			if (iter != hashToFunction.end()) {
+				//yay, found a function!
+				AnalyzedFunction &f = *(iter->second);
+				if (f.size == temp.size) {
+					strcpy(f.name, temp.name);
+					f.hash=temp.hash;
+					f.size=temp.size;
 				}
 			}
 		}
@@ -403,11 +420,9 @@ namespace MIPSAnalyst {
 
 		// gather relevant address for alu operations
 		// that's usually the value of the dest register
-		switch (MIPS_GET_OP(op))
-		{
+		switch (MIPS_GET_OP(op)) {
 		case 0:		// special
-			switch (MIPS_GET_FUNC(op))
-			{
+			switch (MIPS_GET_FUNC(op)) {
 			case 0x20:	// add
 			case 0x21:	// addu
 				info.hasRelevantAddress = true;

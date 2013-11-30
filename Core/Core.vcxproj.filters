@@ -502,6 +502,9 @@
     <ClCompile Include="HLE\proAdhoc.cpp">
       <Filter>HLE\Libraries</Filter>
     </ClCompile>
+    <ClCompile Include="HLE\ReplaceTables.cpp">
+      <Filter>HLE</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ELF\ElfReader.h">
@@ -929,6 +932,9 @@
     </ClInclude>
     <ClInclude Include="HLE\proAdhoc.h">
       <Filter>HLE\Libraries</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\ReplaceTables.h">
+      <Filter>HLE</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
